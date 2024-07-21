@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using JetBrains.Annotations;
@@ -6,6 +6,8 @@ using NUnit.Framework;
 using FastGraph.Algorithms.Search;
 using static FastGraph.Tests.Algorithms.AlgorithmTestHelpers;
 using static FastGraph.Tests.GraphTestHelpers;
+using FastGraph.Algorithms.Observers;
+using System.Diagnostics;
 
 namespace FastGraph.Tests.Algorithms.Search
 {
@@ -104,7 +106,7 @@ namespace FastGraph.Tests.Algorithms.Search
             }
         }
 
-        #endregion
+        #endregion Test helpers
 
         [Test]
         public void Constructor()
@@ -152,7 +154,7 @@ namespace FastGraph.Tests.Algorithms.Search
                 Assert.IsNotNull(algo.OutEdgesFilter);
             }
 
-            #endregion
+            #endregion Local function
         }
 
         [Test]
@@ -264,7 +266,7 @@ namespace FastGraph.Tests.Algorithms.Search
                 () => new DepthFirstSearchAlgorithm<TestVertex, Edge<TestVertex>>(graph));
         }
 
-        #endregion
+        #endregion Rooted algorithm
 
         [Test]
         public void GetVertexColor()
@@ -293,6 +295,136 @@ namespace FastGraph.Tests.Algorithms.Search
             }
         }
 
+        // <image url="$(ProjectDir)DocumentImages\ShreveStreamOrder.png"/>
+        /// <summary>
+        /// 测试通过Graph获取 Shreve Stream Order
+        /// </summary>
+        [TestCase(0)]
+        [TestCase(1)]
+        [TestCase(2)]
+        [TestCase(3)]
+        [TestCase(4)]
+        [TestCase(5)]
+        public void GraphShreveStreamOrder(int root)
+        {
+            // <image url="$(ProjectDir)DocumentImages\Graph_ShreveStreamOrder_Original.png"/>
+            var graph = new UndirectedGraph<int, Edge<int>>(true);
+            graph.AddVerticesAndEdgeRange(new[]
+            {
+                new Edge<int>(0, 1),
+                new Edge<int>(1, 2),
+                new Edge<int>(1, 3),
+                new Edge<int>(2, 4),
+                new Edge<int>(2, 5),
+            });
+            //Note需要添加反向的边
+            AddReversedEdge(graph);
+
+            // <image url="$(ProjectDir)DocumentImages\Graph_ShreveStreamOrder_0.png"/>
+            // <image url="$(ProjectDir)DocumentImages\Graph_ShreveStreamOrder_1.png"/>
+            // <image url="$(ProjectDir)DocumentImages\Graph_ShreveStreamOrder_2.png"/>
+            // <image url="$(ProjectDir)DocumentImages\Graph_ShreveStreamOrder_3.png"/>
+            // <image url="$(ProjectDir)DocumentImages\Graph_ShreveStreamOrder_4.png"/>
+            // <image url="$(ProjectDir)DocumentImages\Graph_ShreveStreamOrder_5.png"/>
+            var dic = GetGraphEdgeShreveOrderFromRoot(graph.ToBidirectionalGraph(), root);
+        }
+
+        private void AddReversedEdge(UndirectedGraph<int, Edge<int>> graph)
+        {
+            var edges = graph.Edges.ToList();
+            foreach (var edge in edges)
+            {
+                var reversedEdge = new Edge<int>(edge.Target, edge.Source);
+                if (reversedEdge == null || graph.ContainsEdge(reversedEdge)) continue;
+                graph.AddEdge(reversedEdge);
+            }
+        }
+
+        /// <summary>
+        /// 从指定根节点获取图的Shreve Order
+        /// </summary>
+        /// <param name="graph">图</param>
+        /// <param name="root">根节点</param>
+        /// <returns></returns>
+        private BidirectionalGraph<int, TaggedEdge<int, int>> GetGraphEdgeShreveOrderFromRoot(BidirectionalGraph<int, Edge<int>> graph, int root)
+        {
+            //var dic = new Dictionary<Edge<int>, int>();
+
+            var algorithm = new DepthFirstSearchAlgorithm<int, Edge<int>>(graph)
+            {
+                ProcessAllComponents = false,
+            };
+            var recorder = new EdgeRecorderObserver<int, Edge<int>>();
+            recorder.Attach(algorithm);
+            algorithm.Compute(root);
+
+            if (!recorder.Edges.Any()) return null;
+
+            //dfs从根节点遍历得到的有向图
+            var rootDirectedGraph = recorder.Edges.ToBidirectionalGraph<int, Edge<int>>(false);
+            return GetGraphEdgeShreveOrder(rootDirectedGraph);
+        }
+
+        private BidirectionalGraph<int, TaggedEdge<int, int>> GetGraphEdgeShreveOrder(BidirectionalGraph<int, Edge<int>> rootDirectedGraph)
+        {
+            //Dictionary<Edge<int>, int> dic = InitializeDictionary(rootDirectedGraph);
+            var tagedGraph = InitializeTagedGraph(rootDirectedGraph);
+
+            var clonedRootGraph = rootDirectedGraph.Clone();
+
+            clonedRootGraph.EdgeRemoved += e =>
+            {
+                Assert.IsNotNull(e);
+
+                Trace.WriteLine($"Edge[{e}]被移除");
+
+                int target = e.Target;
+
+                int sum = 0;
+                foreach (var itemVkp in tagedGraph.Edges)
+                {
+                    int itemEdgeSource = itemVkp.Source;
+                    if (!target.Equals(itemEdgeSource)) continue;
+
+                    sum += itemVkp.Tag;
+                }
+                TaggedEdge<int, int> matchTaggedEdge = tagedGraph.Edges.FirstOrDefault(edge => Equals(edge.Source, e.Source) && Equals(edge.Target, e.Target));
+                if (matchTaggedEdge == null) return;
+
+                if (clonedRootGraph.IsOutEdgesEmpty(target) && sum < 1) /*dic[e] = 1*/matchTaggedEdge.Tag = 1;
+                else /*dic[e] = sum*/matchTaggedEdge.Tag = sum;
+
+                //设置边的值
+                Trace.WriteLine($"设置Edge[{e}]的Shreve Stream Order值[{/*dic[e]*/matchTaggedEdge.Tag}]");
+            };
+
+            while (clonedRootGraph.Edges.ToList().Count > 0)
+            {
+                int removedEdgeCount = clonedRootGraph.RemoveEdgeIf(edge => clonedRootGraph.IsOutEdgesEmpty(edge.Target));
+            }
+            return /*dic*/ tagedGraph;
+        }
+
+        private static BidirectionalGraph<int, TaggedEdge<int, int>> InitializeTagedGraph(BidirectionalGraph<int, Edge<int>> graph)
+        {
+            var tagedGraph = new BidirectionalGraph<int, TaggedEdge<int, int>>();
+
+            tagedGraph.AddVertexRange(graph.Vertices);
+            graph.Edges.ForEach(e => tagedGraph.AddEdge(new TaggedEdge<int, int>(e.Source, e.Target, 0)));
+
+            return tagedGraph;
+        }
+
+        private Dictionary<Edge<int>, int> InitializeDictionary(BidirectionalGraph<int, Edge<int>> rootDirectedGraph)
+        {
+            var dic = new Dictionary<Edge<int>, int>();
+            foreach (var itemEdge in rootDirectedGraph.Edges)
+            {
+                dic[itemEdge] = 0;
+            }
+            return dic;
+        }
+
         [TestCase(false)]
         [TestCase(true)]
         public void ProcessAllComponents(bool processAll)
@@ -315,7 +447,26 @@ namespace FastGraph.Tests.Algorithms.Search
             {
                 ProcessAllComponents = processAll
             };
-            algorithm.Compute(1);
+            int root = 1;
+
+            var recorder = new EdgeRecorderObserver<int, Edge<int>>();
+            recorder.Attach(algorithm);
+            // <image url="$(ProjectDir)DocumentImages\graph_DepthFirstSearch.png"/>
+            algorithm.Compute(root);
+
+            //dfs从根节点遍历得到的有向图
+            var rootDirectedGraph = new BidirectionalGraph<int, Edge<int>>();
+            if (recorder.Edges.Any())
+            {
+                rootDirectedGraph = recorder.Edges.ToBidirectionalGraph<int, Edge<int>>(false);
+                DFS(rootDirectedGraph, root);
+
+                var tagedGraph = new BidirectionalGraph<int, TaggedEdge<int, int>>();
+                tagedGraph.AddVertexRange(rootDirectedGraph.Vertices);
+                rootDirectedGraph.Edges.ForEach(e => tagedGraph.AddEdge(new TaggedEdge<int, int>(e.Source, e.Target, 0)));
+                // <image url="$(ProjectDir)DocumentImages\tagedGraph.png"/>
+                UpdateEdgeTags(tagedGraph);
+            }
 
             if (processAll)
             {
@@ -330,6 +481,84 @@ namespace FastGraph.Tests.Algorithms.Search
                     new[] { 6, 7, 8 },
                     vertex => algorithm.VerticesColors[vertex] == GraphColor.White);
             }
+        }
+
+        private void DFS(BidirectionalGraph<int, Edge<int>> graph, int start)
+        {
+            // Is source
+            if (graph.IsInEdgesEmpty(start))
+            {
+                Trace.WriteLine($"起点[{start}]为Source");
+            }
+            else
+            {
+                Trace.WriteLine($"起点[{start}]不是一个Source");
+                return;
+            }
+            if (!graph.Vertices.Any(x => x == start)) return;
+
+            var visited = new List<int>();
+            var stack = new Stack<int>();
+            graph.OutEdges(start).ForEach(edge => stack.Push(edge.Target));
+            while (stack.Count > 0)
+            {
+                int current = stack.Pop();
+
+                // Is sink
+                if (graph.IsOutEdgesEmpty(current))
+                {
+                    Trace.WriteLine($"终点[{current}]为Sink");
+                }
+                if (visited.Any(t => t.Equals(current))) continue;
+
+                visited.Add(current);
+                Visit(current);
+                foreach (var n in graph.OutEdges(current))
+                {
+                    if (visited.Contains(n.Target)) continue;
+                    stack.Push(n.Target);
+                }
+            }
+        }
+
+        #region 计算Edge的ShreveOrder 性能不高有多重循环
+
+        /// <summary>
+        /// 遍历图并更新边的Tag值
+        /// </summary>
+        /// <param name="graph"></param>
+        public void UpdateEdgeTags(BidirectionalGraph<int, TaggedEdge<int, int>> graph)
+        {
+            for (int i = 0; i < graph.Edges.ToList().Count; i++)
+            {
+                foreach (var edge in graph.Edges.ToList())
+                {
+                    edge.Tag = CalculateEdgeTag(graph, edge.Target);
+                }
+            }
+        }
+
+        private int CalculateEdgeTag(BidirectionalGraph<int, TaggedEdge<int, int>> graph, int node)
+        {
+            if (graph.IsOutEdgesEmpty(node))
+            {
+                return 1; // 如果节点是末端，返回1
+            }
+
+            int tagSum = 0;
+            foreach (var edge in graph.OutEdges(node))
+            {
+                tagSum += CalculateEdgeTag(graph, edge.Target);
+            }
+
+            return tagSum;
+        }
+
+        #endregion 计算Edge的ShreveOrder 性能不高有多重循环
+
+        public void Visit(int vertex)
+        {
+            Trace.WriteLine("遍历节点Vertex " + vertex.ToString());
         }
 
         [Pure]
