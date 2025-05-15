@@ -899,7 +899,7 @@ namespace FastGraph.Algorithms
         }
 
         /// <summary>
-        /// Checks whether the graph is acyclic or not.
+        /// Checks whether the graph is acyclic or not.Directed Acyclic Graph(有向无环图)
         /// </summary>
         /// <remarks>
         /// Performs a depth first search to look for cycles.
